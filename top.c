@@ -39,7 +39,7 @@ int main(int argc, char ** argv)
 
     //can we assume 16 bit input 
     int numframes = header->subchunk2Size / header->blockAlign;
-    //printf("Header Sample Rate = %d\n", header->sampleRate);
+    printf("Audio Channels = %d\n", header->numChannels);
     int framesperpacket = header->sampleRate / 100; //10ms oer packet
     
     printf("sample bit depth = %d", header->bitsPerSample);
@@ -48,9 +48,33 @@ int main(int argc, char ** argv)
         printf("Can only process 16 bit audio atm");
         return -1;
     }
-    int16_t databus[framesperpacket];
-    while(fread())
+    int16_t * stereo = malloc(sizeof(int16_t) * framesperpacket);
+    int16_t * databus = malloc(framesperpacket * sizeof(int16_t));
+    int validframesread = framesperpacket;
+    if(header->numChannels == 1) //mono audio
+    {
+        while(validframesread == framesperpacket)
+        {
+            validframesread = fread(databus, sizeof(int16_t), framesperpacket, wavfp);
+            //PROCESS PACKET HERE
+        }
+    }
+    else if(header->numChannels == 2) //stereo
+    {
+        while(validframesread == 2*framesperpacket)
+        {
+            validframesread = fread(stereo, sizeof(int16_t), 2 * framesperpacket, wavfp);
+            int counter = 0;
+            for(int i = 0; i < 2 * framesperpacket; i += 2)
+            {
+                databus[counter] = stereo[i]/2 + stereo[i + 1]/2;
+                counter++;
+            }
 
+            //PROCESS PACKET HERE
+        }
+    }
+    
 }
 
 WavHeader * readfile(FILE * fp)
