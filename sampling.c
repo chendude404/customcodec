@@ -1,3 +1,5 @@
+#include "declarations.h"
+#include "dithering.h"
 /*
 RESAMPLING + 3-BIT ENCODING MODULE
 ===================================
@@ -22,8 +24,49 @@ STEP 1 — COMPUTE DECIMATION FACTOR
     // If input_sample_rate is not an integer multiple of 16000
     // (e.g. 44100), a polyphase resampler is needed instead.
     // For now we assume a clean multiple.
+*/
+void resamplepackets(int16_t * databus, FILE * fp, int16_t numsamples, int alphaval, uint32_t * seed)
+{
+    int decimation_factor = 3; // 48kHz -> 16kHz
+    int out_count = numsamples / decimation_factor;
 
+    // Step 1: box-filter + decimate (average 3 input samples per output sample)
+    int16_t downsampled[out_count];
+    for(int i = 0; i < out_count; i++)
+        downsampled[i] = ((int32_t)databus[i*3] + databus[i*3+1] + databus[i*3+2]) / 3;
 
+    // Step 2: dither and quantize the decimated samples to 3 bits
+    dither_quantize_fast(downsampled, out_count, 3, threshol_lut(alphaval), seed);
+
+    // Step 3: bit-pack 8 x 3-bit symbols into 3 bytes, write each group
+    //CHECK THIS THOROUGHLY
+    int counter = 0;
+    char bitpack[3] = {0, 0, 0};
+    for(int i = 0; i < out_count; i++)
+    {
+        uint8_t s = downsampled[i] & 0x07;
+
+        if      (counter == 0) { bitpack[0] |= (s << 5); }
+        else if (counter == 1) { bitpack[0] |= (s << 2); }
+        else if (counter == 2) { bitpack[0] |= (s >> 1);  bitpack[1] |= ((s & 0x01) << 7); }
+        else if (counter == 3) { bitpack[1] |= (s << 4); }
+        else if (counter == 4) { bitpack[1] |= (s << 1); }
+        else if (counter == 5) { bitpack[1] |= (s >> 2);  bitpack[2] |= ((s & 0x03) << 6); }
+        else if (counter == 6) { bitpack[2] |= (s << 3); }
+        else if (counter == 7)
+        {
+            bitpack[2] |= s;
+            fwrite(bitpack, 1, 3, fp);
+            bitpack[0] = 0; bitpack[1] = 0; bitpack[2] = 0;
+            counter = -1;
+        }
+        counter++;
+    }
+}
+
+//void bitpacker() for later
+
+/*
 STEP 2 — ANTI-ALIASING LOW-PASS FILTER (before decimating)
 ============================================================
 

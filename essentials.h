@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+#endif
 /* 
     to try and do real time we need to do double buffering
     Replace fread with an interrupt-driven buffer
@@ -51,4 +52,3 @@ typedef struct WavHeader{
 
 //how do we flash the data to each block
 
-#endif

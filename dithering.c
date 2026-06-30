@@ -1,4 +1,4 @@
-#include <stdint.h>
+#include "dithering.h"
 
 /*
 THE asr codec in C -  
@@ -50,6 +50,7 @@ uint32_t bit = ((
 *seedptr = (*seedptr >> 1) | (bit << 31);
 }
 
+//does ti sample by sample goofy ahh code
 int16_t dither_quantize(int16_t input_sample, int target_bits, uint32_t alpha_q16, uint32_t *seed_ptr) 
 {
     int shift_bits = 16 - target_bits;
@@ -76,4 +77,44 @@ int16_t dither_quantize(int16_t input_sample, int target_bits, uint32_t alpha_q1
     int32_t quantized_output = (floor_term << shift_bits) + (delta >> 1);
 
     return (int16_t)quantized_output;
+}
+
+//GEMINI's QUANTIZER FOR THE ENTIRE SAMPLE
+void dither_quantize_fast(int16_t * restrict samples, size_t num_samples, int target_bits, uint32_t alpha_q16, uint32_t * restrict seed_ptr) 
+{
+    int shift_bits = 16 - target_bits;
+    int32_t delta = 1 << shift_bits; 
+    int32_t active_width = (alpha_q16 * delta) >> 16; 
+    uint32_t threshold = alpha_q16 << 16;
+
+    // Process the array in small chunks to stay within the L1 cache
+    for (size_t i = 0; i < num_samples; i += BLOCK_SIZE) {
+        
+        size_t current_block = (num_samples - i < BLOCK_SIZE) ? (num_samples - i) : BLOCK_SIZE;
+        int32_t dither_buffer[BLOCK_SIZE] = {0};
+
+        // Phase 1: Sequential Noise Generation
+        // This loop is purely stateful but isolated from the heavy math
+        for (size_t j = 0; j < current_block; j++) {
+            lfsr32(seed_ptr);
+            if (*seed_ptr <= threshold) {
+                lfsr32(seed_ptr);
+                uint32_t uniform_noise = ((uint64_t)(*seed_ptr) * active_width) >> 32;
+                dither_buffer[j] = (int32_t)uniform_noise - (active_width >> 1);
+            }
+        }
+
+        // Phase 2: Vectorizable Quantization Math
+        // Because 'samples' is marked restrict, the compiler can use SIMD here
+        for (size_t j = 0; j < current_block; j++) {
+            int32_t dithered = (int32_t)samples[i + j] + dither_buffer[j];
+
+            // Branchless clamping (compiles to fast CMOV/CSEL instructions)
+            dithered = dithered > 32767 ? 32767 : dithered;
+            dithered = dithered < -32768 ? -32768 : dithered;
+            
+            int32_t floor_term = dithered >> shift_bits; 
+            samples[i + j] = (int16_t)((floor_term << shift_bits) + (delta >> 1));
+        }
+    }
 }
