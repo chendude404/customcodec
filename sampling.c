@@ -44,7 +44,7 @@ void resamplepackets(int16_t * databus, FILE * fp, int16_t numsamples, int alpha
     char bitpack[3] = {0, 0, 0};
     for(int i = 0; i < out_count; i++)
     {
-        uint8_t s = downsampled[i] & 0x07;
+        uint8_t s = (uint8_t)((downsampled[i] + 32768) >> 13);
 
         if      (counter == 0) { bitpack[0] |= (s << 5); }
         else if (counter == 1) { bitpack[0] |= (s << 2); }

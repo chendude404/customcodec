@@ -19,7 +19,7 @@ int main(int argc, char ** argv)
 
     uint32_t * seedpointer = malloc(sizeof(uint32_t));
 
-    *seedpointer = (uint32_t)strtoul(argv[4], NULL, 10);
+    *seedpointer = (uint32_t)strtoul(argv[3], NULL, 10);
     //smaples
     FILE * wavfp = fopen(argv[1], "rb"); //have the wav file be argv[2]
     //determine rate, size so we can determine number of packets we need
@@ -57,19 +57,19 @@ int main(int argc, char ** argv)
         printf("Can only process 16 bit audio atm");
         return -1;
     }
-    int16_t * stereo = malloc(sizeof(int16_t) * framesperpacket);
+    int16_t * stereo = malloc(sizeof(int16_t) * 2 * framesperpacket);
     int16_t * databus = malloc(framesperpacket * sizeof(int16_t));
     int validframesread = framesperpacket;
     //10ms -> 480 or 441 frames per packet
 
-    FILE * outfp = fopen(argv[3], "wb");
+    FILE * outfp = fopen(argv[4], "wb");
+    if(outfp == NULL)
     {
-        if(outfp == NULL)
-        {
-            printf("Could not write to output file, Error");
-            return -1;
-        }
+        printf("Could not write to output file, Error");
+        return -1;
     }
+    printf("We are writing to output file %s", argv[4]);
+
 
     writeglx(header, outfp, alphaval, numframes);
     
@@ -80,25 +80,33 @@ int main(int argc, char ** argv)
         {
             validframesread = fread(databus, sizeof(int16_t), framesperpacket, wavfp);
             //PROCESS PACKET HERE
-            resamplepackets(databus, outfp, framesperpacket, alphaval, seedpointer);
+            if(validframesread == framesperpacket)
+                resamplepackets(databus, outfp, framesperpacket, alphaval, seedpointer);
         }
     }
     else if(header->numChannels == 2) //stereo
     {
+        validframesread = 2 * framesperpacket;
         while(validframesread == 2*framesperpacket)
         {
             validframesread = fread(stereo, sizeof(int16_t), 2 * framesperpacket, wavfp);
             int counter = 0;
-            for(int i = 0; i < 2 * framesperpacket; i += 2)
+            for(int i = 0; i + 1 < validframesread; i += 2)
             {
                 databus[counter] = stereo[i]/2 + stereo[i + 1]/2;
                 counter++;
             }
-            resamplepackets(databus, outfp, framesperpacket, alphaval, seedpointer);
-
             //PROCESS PACKET HERE
+            if(validframesread == 2*framesperpacket)
+                resamplepackets(databus, outfp, framesperpacket, alphaval, seedpointer);
+            else
+                validframesread = counter; // leftover frames, in mono-frame units, for the guard
         }
     }
+
+    // process the final partial packet left in databus
+    if(validframesread > 0 && validframesread < framesperpacket)
+        resamplepackets(databus, outfp, validframesread, alphaval, seedpointer);
 
     free(header);
     free(databus);
@@ -146,13 +154,14 @@ WavHeader * readfile(FILE * fp)
             memcpy(header->data, id, 4);
             header->subchunk2Size = sz;
             have_data = 1;
+            break; // fp is now at the start of the audio samples; stop scanning
         }
         else
         {
             fseek(fp, sz, SEEK_CUR);
         }
 
-        if (sz & 1) fseek(fp, 1, SEEK_CUR);
+        if(sz & 1) fseek(fp, 1, SEEK_CUR);
     }
 
     if (!have_fmt || !have_data)
@@ -184,7 +193,7 @@ void writeglx(WavHeader * header, FILE * fp, int alpha, int numframes)
     uint8_t bitdepthandalpha[] = {3, alpha};
     fwrite(&sampleRate, sizeof(uint32_t), 1, fp);
     fwrite(&bitdepthandalpha, sizeof(uint8_t), 2, fp);
-    uint32_t numpackets = numframes/3;
+    uint32_t numpackets = numframes / (header->sampleRate / 100);
     fwrite(&numpackets, sizeof(uint32_t), 1, fp);
 
 }
