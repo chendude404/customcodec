@@ -15,10 +15,10 @@ uint32_t threshol_lut(int alphaIdx){
     case 5: return 26255; // alpha=0.4
     case 6: return 32818; // alpha=0.5
     case 7: return 39387; // alpha=0.6
-    case 8: return 45945; // alpha=0.7
+    case 8: return 45945; // alpha=0.7 
     case 9: return 52509; // alpha=0.8
     case 10: return 59072; // alpha=0.9
-    default: return 65636; // alpha=1
+    default: return 65536; // alpha=1
     };
 }
 
@@ -85,7 +85,7 @@ void dither_quantize_fast(int16_t * restrict samples, size_t num_samples, int ta
     int shift_bits = 16 - target_bits;
     int32_t delta = 1 << shift_bits; 
     int32_t active_width = (alpha_q16 * delta) >> 16; 
-    uint32_t threshold = alpha_q16 << 16;
+    uint64_t threshold = (uint64_t)alpha_q16 << 16;
 
     // Process the array in small chunks to stay within the L1 cache
     for (size_t i = 0; i < num_samples; i += BLOCK_SIZE) {

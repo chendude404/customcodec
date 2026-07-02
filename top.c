@@ -190,7 +190,8 @@ void writeglx(WavHeader * header, FILE * fp, int alpha, int numframes)
     char magic[] = "GLX1"; //includes \0
     fwrite(&magic, sizeof(char), 4, fp); //only 4 bytes so we don't  include null terminator
     uint32_t sampleRate = 16000;
-    uint8_t bitdepthandalpha[] = {3, alpha};
+    uint8_t scaledalpha = alpha * 255;
+    uint8_t bitdepthandalpha[] = {3, scaledalpha};
     fwrite(&sampleRate, sizeof(uint32_t), 1, fp);
     fwrite(&bitdepthandalpha, sizeof(uint8_t), 2, fp);
     uint32_t numpackets = numframes / (header->sampleRate / 100);

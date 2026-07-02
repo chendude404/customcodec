@@ -5,48 +5,149 @@
 #include <stdint.h>
 #include <string.h>
 
-static void write_le32(FILE *f, uint32_t v){ fputc(v&0xff,f); fputc((v>>8)&0xff,f); fputc((v>>16)&0xff,f); fputc((v>>24)&0xff,f); }
-static void write_le16(FILE *f, uint16_t v){ fputc(v&0xff,f); fputc((v>>8)&0xff,f); }
+//bitmasks v&0xff isolates the lowest 8 bits
+uint32_t threshol_lut(int alphaIdx)
+{
+    switch (alphaIdx) {
+    case 1: return 0; // alpha=0
+    case 2: return 6564; // alpha=0.1
+    case 3: return 13128; // alpha=0.2
+    case 4: return 19691; // alpha=0.3
+    case 5: return 26255; // alpha=0.4
+    case 6: return 32818; // alpha=0.5
+    case 7: return 39387; // alpha=0.6
+    case 8: return 45945; // alpha=0.7 
+    case 9: return 52509; // alpha=0.8
+    case 10: return 59072; // alpha=0.9
+    default: return 65536; // alpha=1
+    };
+}
+
+short lcg_rng(short prev, short a, short c, short m)
+{
+/*
+x_n+1 = (a * x_n + c) mod m
+Time complexity:
+Generating a sequesnce: O(n)
+Generating next smaple: O(1)
+Space complexity: O(1)
+Notes:
+- fast + easy to implement
+- can only generate m unique numbers 
+*/
+    return (a * prev + c) % m;
+}
+
+void lfsr32(uint32_t *seedptr)
+{
+/*
+Taps from: https://docs.amd.com/v/u/en-US/xapp052
+*/
+    uint32_t bit = ((
+        (*seedptr >> 31) ^ 
+        (*seedptr >> 21) ^ 
+        (*seedptr >> 1) ^ 
+        (*seedptr >> 0)) & 
+        1) ;
+    *seedptr = (*seedptr >> 1) | (bit << 31);
+}
+
+static void write_le16(FILE *f, uint16_t v)
+{
+    fputc(v&0xff, f);
+    fputc((v>>8)&0xff, f);
+}
+
+static void write_le32(FILE *f, uint32_t v)
+{
+    fputc(v&0xff, f);
+    fputc((v>>8)&0xff, f);
+    fputc((v>>16)&0xff, f);
+    fputc((v>>24)&0xff, f);
+}
 
 int main(int argc, char **argv)
 {
-    if(argc != 3){ printf("usage: %s in.glx out.wav\n", argv[0]); return -1; }
+    if(argc != 3)
+    { 
+        printf("usage: %s in.glx out.wav\n", argv[0]); 
+        return -1; 
+    }
 
     FILE *in = fopen(argv[1], "rb");
-    if(!in){ printf("cannot open %s\n", argv[1]); return -1; }
+    if(!in)
+    { 
+        printf("cannot open %s\n", argv[1]); 
+        return -1; 
+    }
 
     // --- GLX header (14 bytes): magic[4], sampleRate u32, bitsPerSym u8, alphaIdx u8, numPackets u32 ---
     char magic[4];
-    uint32_t sampleRate, numPackets;
+    uint32_t sampleRate, numPackets, seedidx;
     uint8_t bitsPerSym, alphaIdx;
     fread(magic, 1, 4, in);
-    fread(&sampleRate, 4, 1, in);
+    fread(&sampleRate, sizeof(uint32_t), 1, in);
     fread(&bitsPerSym, 1, 1, in);
     fread(&alphaIdx, 1, 1, in);
-    fread(&numPackets, 4, 1, in);
-    if(memcmp(magic, "GLX1", 4) != 0){ printf("not a GLX1 file\n"); return -1; }
+    fread(&seedidx, sizeof(uint32_t), 1, in);
+    fread(&numPackets, sizeof(uint32_t), 1, in);
+
+    if(memcmp(magic, "GLX1", 4) != 0)
+    { 
+        printf("not a GLX1 file\n"); 
+        return -1; 
+    }
     printf("rate=%u bits=%u alpha=%u packets=%u\n", sampleRate, bitsPerSym, alphaIdx, numPackets);
 
     // --- decode 3-bit symbols (8 symbols per 3 bytes, MSB-first) into 16-bit PCM ---
+    //FIRST WE HAVE TO RECONSTRUCT DITHER
+    int target_bits = 3; //magic value all we have rn
+    int shift_bits = 16 - target_bits;
+    int32_t delta = 1 << shift_bits;
+    uint32_t alpha_q16 = threshol_lut(alphaIdx);
+    int32_t active_width = (alpha_q16 * delta) >> 16;
+    uint64_t threshold = (uint64_t)alpha_q16 << 16;
+
     FILE *tmp = tmpfile();
     uint32_t nsamples = 0;
     unsigned char b[3];
-    while(fread(b, 1, 3, in) == 3){
+    while(fread(b, 1, 3, in) == 3)
+    {
         uint32_t v = ((uint32_t)b[0] << 16) | ((uint32_t)b[1] << 8) | b[2];
-        for(int k = 0; k < 8; k++){
+        for(int k = 0; k < 8; k++)
+        {
             int s = (v >> (21 - 3*k)) & 0x7;          // 0..7
-            int16_t sample = (int16_t)(s * 8192 - 28672); // inverse of (x+32768)>>13 bin centre
+            int16_t bin_center = (int16_t)(s * 8192 - 28672); // inverse of (x+32768)>>13 bin centre
+
+            //subtractive dither -> mirrored on other side of encoder
+            int32_t dither = 0;
+            lfsr32(&seedidx);                 // unconditional per-sample gate draw
+            if (seedidx <= threshold)
+            {
+                lfsr32(&seedidx);             // noise draw, only if gated
+                uint32_t uniform_noise = ((uint64_t)seedidx * active_width) >> 32;
+                dither = (int32_t)uniform_noise - (active_width >> 1);
+            }
+
+            int32_t sample = (int32_t)bin_center - dither;
+            if (sample > 32767) sample = 32767;
+            if (sample < -32768) sample = -32768;
             write_le16(tmp, (uint16_t)sample);
             nsamples++;
         }
     }
 
+    //new function to requantize
+
     // --- write a standard 16 kHz mono 16-bit WAV ---
     FILE *out = fopen(argv[2], "wb");
     if(!out){ printf("cannot write %s\n", argv[2]); return -1; }
     uint32_t dataBytes = nsamples * 2;
-    fwrite("RIFF", 1, 4, out); write_le32(out, 36 + dataBytes); fwrite("WAVE", 1, 4, out);
-    fwrite("fmt ", 1, 4, out); write_le32(out, 16);
+    fwrite("RIFF", 1, 4, out); 
+    write_le32(out, 36 + dataBytes); 
+    fwrite("WAVE", 1, 4, out);
+    fwrite("fmt ", 1, 4, out); 
+    write_le32(out, 16);
     write_le16(out, 1);            // PCM
     write_le16(out, 1);            // mono
     write_le32(out, sampleRate);
@@ -63,3 +164,4 @@ int main(int argc, char **argv)
     printf("wrote %u samples (%.2f s) to %s\n", nsamples, (double)nsamples/sampleRate, argv[2]);
     return 0;
 }
+
