@@ -2,10 +2,11 @@
 
 /*
 THE asr codec in C -  
-.glz
+.glx
 Input 16bit 48 kHz 
 */
- 
+
+//https://www.itu.int/rec/T-REC-G.191/en 
 uint32_t threshol_lut(int alphaIdx){
     switch (alphaIdx) {
     case 1: return 0; // alpha=0
@@ -20,6 +21,61 @@ uint32_t threshol_lut(int alphaIdx){
     case 10: return 59072; // alpha=0.9
     default: return 65536; // alpha=1
     };
+}
+
+// Decompression LUT: 3-bit mu-law for MU = 255.0
+const float MU_LAW_EXPAND_3BIT[8] = {
+    -1.000000f,  // Level 0
+    -0.198424f,  // Level 1
+    -0.038311f,  // Level 2
+    -0.005110f,  // Level 3
+     0.005110f,  // Level 4
+     0.038311f,  // Level 5
+     0.198424f,  // Level 6
+     1.000000f   // Level 7
+};
+
+uint32_t headroom_lut(int target_bits){
+    // worst-case |dither| at alpha=1.0 is delta/2 = 2^(15 - target_bits)
+    switch (target_bits) {
+    case 1: return 16384;
+    case 2: return 8192;
+    case 3: return 4096;
+    case 4: return 2048;
+    case 5: return 1024;
+    case 6: return 512;
+    case 7: return 256;
+    case 8: return 128;
+    default: return 0;
+    };
+}
+
+int16_t mulaw_remap(int16_t input_sample, int target_bits)
+{
+/*
+G.711-style segmented mu-law (mu=255), integer only.
+Output lands in [-safe_max, +safe_max] where safe_max reserves exactly
+worst-case-dither headroom, so dither_quantize_fast can never overflow int16.
+Call on each sample BEFORE dither_quantize_fast.
+*/
+    int32_t safe_max = 32767 - (int32_t)headroom_lut(target_bits);
+
+    int neg = input_sample < 0;
+    int32_t mag = neg ? -(int32_t)input_sample : (int32_t)input_sample; // <= 32768, fits int32
+
+    mag >>= 2;                  // 16-bit -> 14-bit magnitude domain
+    mag += 33;                  // standard mu-law bias
+    if (mag > 8191) mag = 8191;
+
+    int seg = 0;                // segment = MSB position above bit 5
+    for (int32_t t = mag >> 6; t != 0; t >>= 1) seg++;   // 0..7
+
+    int32_t mant = (mag >> (seg + 1)) & 0x0F;
+    int32_t code = (seg << 4) | mant;    // 7-bit companded magnitude code, 0..127
+
+    // spread the code linearly across the headroom-safe output range
+    int32_t out = (code * safe_max) / 127;   // <= 127*32767 < 2^22, no overflow
+    return (int16_t)(neg ? -out : out);
 }
 
 short lcg_rng(short prev, short a, short c, short m)
@@ -41,42 +97,8 @@ void lfsr32(uint32_t *seedptr){
 /*
 Taps from: https://docs.amd.com/v/u/en-US/xapp052
 */
-uint32_t bit = ((
-    (*seedptr >> 31) ^ 
-    (*seedptr >> 21) ^ 
-    (*seedptr >> 1) ^ 
-    (*seedptr >> 0)) & 
-    1) ;
-*seedptr = (*seedptr >> 1) | (bit << 31);
-}
-
-//does ti sample by sample goofy ahh code
-int16_t dither_quantize(int16_t input_sample, int target_bits, uint32_t alpha_q16, uint32_t *seed_ptr) 
-{
-    int shift_bits = 16 - target_bits;
-    int32_t delta = 1 << shift_bits; 
-
-    int32_t active_width = (alpha_q16 * delta) >> 16; 
-    int32_t dither = 0;
-
-    lfsr32(seed_ptr);
-    if (*seed_ptr <= (alpha_q16 << 16)) {
-        lfsr32(seed_ptr);
-        uint32_t rand_val = *seed_ptr;
-        
-        uint32_t uniform_noise = ((uint64_t)rand_val * active_width) >> 32;
-        dither = (int32_t)uniform_noise - (active_width >> 1);
-    }
-
-    int32_t dithered_sample = (int32_t)input_sample + dither;
-
-    if (dithered_sample > 32767)  dithered_sample = 32767;
-    if (dithered_sample < -32768) dithered_sample = -32768;
-    //D * floor( dithered_sample / D ) + D/2
-    int32_t floor_term = dithered_sample >> shift_bits; 
-    int32_t quantized_output = (floor_term << shift_bits) + (delta >> 1);
-
-    return (int16_t)quantized_output;
+    uint32_t bit = (((*seedptr >> 31) ^ (*seedptr >> 21) ^ (*seedptr >> 1) ^ (*seedptr >> 0)) & 1) ;
+    *seedptr = (*seedptr >> 1) | (bit << 31);
 }
 
 //GEMINI's QUANTIZER FOR THE ENTIRE SAMPLE

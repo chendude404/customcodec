@@ -52,6 +52,50 @@ Taps from: https://docs.amd.com/v/u/en-US/xapp052
     *seedptr = (*seedptr >> 1) | (bit << 31);
 }
 
+uint32_t headroom_lut(int target_bits)
+{
+    // worst-case |dither| at alpha=1.0 is delta/2 = 2^(15 - target_bits)
+    switch (target_bits) {
+    case 1: return 16384;
+    case 2: return 8192;
+    case 3: return 4096;
+    case 4: return 2048;
+    case 5: return 1024;
+    case 6: return 512;
+    case 7: return 256;
+    case 8: return 128;
+    default: return 0;
+    };
+}
+
+int16_t mulaw_expand(int16_t compressed, int target_bits)
+{
+/*
+Inverse of mulaw_remap() in dithering.c. Integer only.
+Input is a companded-domain sample (bin centre minus subtractive dither),
+which is why this takes an arbitrary int16 rather than a 3-bit symbol.
+Call AFTER the dither subtraction, on the companded sample.
+*/
+    int32_t safe_max = 32767 - (int32_t)headroom_lut(target_bits);
+
+    int neg = compressed < 0;
+    int32_t mag = neg ? -(int32_t)compressed : (int32_t)compressed;
+    if (mag > safe_max) mag = safe_max;   // dither can push slightly past; clamp
+
+    // undo the linear spread: recover the 7-bit code, rounding to nearest
+    int32_t code = (mag * 127 + (safe_max >> 1)) / safe_max;  // <= 32767*127 < 2^22
+    if (code > 127) code = 127;
+
+    int32_t seg  = code >> 4;
+    int32_t mant = code & 0x0F;
+
+    // inverse of the segment packing, then unbias and return to 16-bit domain
+    int32_t m14 = (((mant << 1) + 33) << seg) - 33;   // <= 8031, no overflow
+    int32_t out = m14 << 2;                            // <= 32124
+    if (out > 32767) out = 32767;
+    return (int16_t)(neg ? -out : out);
+}
+
 static void write_le16(FILE *f, uint16_t v)
 {
     fputc(v&0xff, f);
@@ -98,6 +142,8 @@ int main(int argc, char **argv)
         return -1; 
     }
     printf("rate=%u bits=%u alpha=%u packets=%u\n", sampleRate, bitsPerSym, alphaIdx, numPackets);
+    //DECOMPRESS HERE -> WHAT ALGORITHM
+
 
     // --- decode 3-bit symbols (8 symbols per 3 bytes, MSB-first) into 16-bit PCM ---
     //FIRST WE HAVE TO RECONSTRUCT DITHER
@@ -107,6 +153,9 @@ int main(int argc, char **argv)
     uint32_t alpha_q16 = threshol_lut(alphaIdx);
     int32_t active_width = (alpha_q16 * delta) >> 16;
     uint64_t threshold = (uint64_t)alpha_q16 << 16;
+
+
+
 
     FILE *tmp = tmpfile();
     uint32_t nsamples = 0;
