@@ -1,5 +1,6 @@
 #include "declarations.h"
 #include "dithering.h"
+#include "bitpack.h"
 /*
 RESAMPLING + 3-BIT ENCODING MODULE
 ===================================
@@ -64,7 +65,31 @@ void resamplepackets(int16_t * databus, FILE * fp, int16_t numsamples, int alpha
     }
 }
 
-//void bitpacker() for later
+size_t bitpack_write(BitPacker *bp, uint32_t symbol, int width, uint8_t *out, size_t out_cap)
+{
+    if (width <= 0 || width > 24) return 0;  // keeps bitbuf within uint32_t: 7 leftover + 24 new = 31 bits max
+
+    bp->bitbuf = (bp->bitbuf << width) | (symbol & ((1u << width) - 1u));
+    bp->bitcount += width;
+
+    size_t written = 0;
+    while (bp->bitcount >= 8 && written < out_cap) {
+        bp->bitcount -= 8;
+        out[written++] = (uint8_t)(bp->bitbuf >> bp->bitcount);
+    }
+    return written;
+}
+
+size_t bitpack_flush(BitPacker *bp, uint8_t *out, size_t out_cap)
+{
+    if (bp->bitcount == 0) return 0;
+    if (out_cap == 0) return 0;
+
+    out[0] = (uint8_t)(bp->bitbuf << (8 - bp->bitcount)); // pad bits are zeros on the right
+    bp->bitbuf = 0;
+    bp->bitcount = 0;
+    return 1;
+}
 
 /*
 STEP 2 — ANTI-ALIASING LOW-PASS FILTER (before decimating)

@@ -2,7 +2,6 @@
 #define ASR_CODEC_H
 
 #include <stdint.h>
-#include <stdbool.h>
 #include <stddef.h>
 
 uint32_t threshol_lut(int alphaIdx);
