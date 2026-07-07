@@ -7,7 +7,7 @@
 
 /* ── PCM conversion ─────────────────────────────────────────────────── */
 
-float glx_pcm16_to_float(int16_t s)
+float glx_pcm16_to_float(int16_t s) //[✓]
 {
     /* Divide by 32768 so the full int16 range maps into [-1, 1).
      * (+32767 → 0.99997, -32768 → -1.0 exactly.) */
@@ -19,28 +19,27 @@ int16_t glx_float_to_pcm16(float x)
     float y = x * 32768.0f;
     if (y >  32767.0f) y =  32767.0f;
     if (y < -32768.0f) y = -32768.0f;
-    /* round-to-nearest, ties away from zero */
     return (int16_t)(y >= 0.0f ? y + 0.5f : y - 0.5f);
 }
 
 /* ── µ-law ──────────────────────────────────────────────────────────── */
-
-float glx_ulaw_compress(float x)
+//check these equations ->changed log1pf(LGX_MU) to hardcodec value for LNMU wiht 8 decimal points of precision
+float glx_ulaw_compress(float x) //[✓]
 {
     /* sign(x) * ln(1 + µ|x|) / ln(1 + µ)  — log1pf for stability near 0 */
     float s = (x < 0.0f) ? -1.0f : 1.0f;
-    return s * log1pf(GLX_MU * fabsf(x)) / log1pf(GLX_MU);
+    return s * log1pf(GLX_MU * fabsf(x)) / LNMU;
 }
 
-float glx_ulaw_expand(float y)
+float glx_ulaw_expand(float y) //[✓]
 {
     /* sign(y) * ((1+µ)^|y| - 1) / µ  — expm1f is the stable form */
     float s = (y < 0.0f) ? -1.0f : 1.0f;
-    return s * expm1f(fabsf(y) * log1pf(GLX_MU)) / GLX_MU;
+    return s * expm1f(fabsf(y) * LNMU) / GLX_MU; 
 }
 
 /* ── Headroom ───────────────────────────────────────────────────────── */
-
+//we need to compute a headroom factor before applying dithering to MU LAW
 static float glx_delta(int bitdepth)
 {
     return 2.0f / (float)(1u << bitdepth);
@@ -115,12 +114,9 @@ float glx_dequantize(uint8_t code, int bitdepth)
 
 /* ── Full pipeline ──────────────────────────────────────────────────── */
 
-int glx_encode(const int16_t *pcm, size_t n,
-               uint8_t *codes,
-               int bitdepth, float alpha, uint32_t seed, int mulaw)
+int glx_encode(const int16_t *pcm, size_t n, uint8_t *codes, int bitdepth, float alpha, uint32_t seed, int mulaw)
 {
-    if (!pcm || !codes || bitdepth < 1 || bitdepth > 8 ||
-        alpha < 0.0f || alpha > 1.0f)
+    if (!pcm || !codes || bitdepth < 1 || bitdepth > 8 ||alpha < 0.0f || alpha > 1.0f)
         return -1;
 
     glx_dither_state st;

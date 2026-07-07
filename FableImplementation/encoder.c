@@ -40,17 +40,27 @@ int main(int argc, char **argv)
     }
 
     int alphaIdx  = atoi(argv[2]);
+    //check
     uint32_t seed = (uint32_t)strtoul(argv[3], NULL, 10);
-    int mulaw     = atoi(argv[4]);
-    if (mulaw != 1 && mulaw != 0) {
+    if(seed == 0)
+    {
+        printf("Seed Cannot be 0, otherwise Dither RNG breaks\n");
+        return -1;
+    } //added seed check
+
+    int mulaw = atoi(argv[4]);
+
+    if (mulaw != 1 && mulaw != 0) 
+    {
         printf("Argv[4] must be Mu Law: 1 for Yes, 0 for No\n");
         return -1;
     }
-
+    //good thus far
     /* Step 1: read the wav, downmixed to mono */
     uint32_t rate;
-    size_t n48;
-    int16_t *pcm48 = wav_read_mono16(argv[1], &rate, &n48);
+    size_t n48; //check what sizet does
+    int16_t *pcm48 = wav_read_mono16(argv[1], &rate, &n48); //this should get how many packets?
+
     if (!pcm48) return -1;
 
     if (rate != GLX_IN_RATE) {
@@ -62,6 +72,8 @@ int main(int argc, char **argv)
 
     /* Step 2: box-filter + decimate 48 kHz -> 16 kHz, then drop the
      * trailing partial packet so numPackets describes the stream exactly */
+
+    //FAHHH DO NOT DROP THE LAST PARTIAL PACKET
     size_t n16 = n48 / GLX_DECIMATION;
     uint32_t numPackets = (uint32_t)(n16 / GLX_FRAMES_PER_PACKET);
     n16 = (size_t)numPackets * GLX_FRAMES_PER_PACKET;

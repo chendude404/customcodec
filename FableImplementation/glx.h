@@ -10,6 +10,7 @@
 
 #define GLX_MAGIC             "GLX1"
 #define GLX_MU                255.0f
+#define LNMU                  5.54517744 //precomupted natural log
 #define GLX_BITS              3       /* quantizer bit depth */
 #define GLX_IN_RATE           48000u  /* design decision: 48 kHz input only */
 #define GLX_OUT_RATE          16000u
