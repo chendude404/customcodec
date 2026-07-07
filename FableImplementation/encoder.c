@@ -1,4 +1,5 @@
 #include "glx.h"
+#include "compression.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -27,15 +28,17 @@ static void write_glx_header(FILE *fp, const GlxHeader *h)
     fwrite(&h->bitsPerSym, sizeof(uint8_t), 1, fp);
     fwrite(&h->alphaIdx, sizeof(uint8_t), 1, fp);
     fwrite(&h->mulaw, sizeof(uint8_t), 1, fp);
+    fwrite(&h->huff, sizeof(uint8_t), 1, fp);
     fwrite(&h->seed, sizeof(uint32_t), 1, fp);
     fwrite(&h->numPackets, sizeof(uint32_t), 1, fp);
 }
 
 int main(int argc, char **argv)
 {
-    /* call of format ./our.exe our.wav alpha seed int (1 for mu law, 0 for not) out.glx */
-    if (argc != 6) {
-        printf("call of format ./our.exe our.wav alpha seed mulaw out.glx\n");
+    /* ./our.exe our.wav alpha seed mulaw out.glx [huff]
+     * huff (optional): 1 = Huffman-code the deltas (default), 0 = raw 4-bit */
+    if (argc != 6 && argc != 7) {
+        printf("call of format ./our.exe our.wav alpha seed mulaw out.glx [huff]\n");
         return -1;
     }
 
@@ -50,9 +53,16 @@ int main(int argc, char **argv)
 
     int mulaw = atoi(argv[4]);
 
-    if (mulaw != 1 && mulaw != 0) 
+    if (mulaw != 1 && mulaw != 0)
     {
         printf("Argv[4] must be Mu Law: 1 for Yes, 0 for No\n");
+        return -1;
+    }
+
+    int huff = (argc == 7) ? atoi(argv[6]) : 1;   /* default: entropy-code */
+    if (huff != 1 && huff != 0)
+    {
+        printf("Argv[6] (huff) must be 1 (Huffman) or 0 (raw 4-bit)\n");
         return -1;
     }
     //good thus far
@@ -102,7 +112,20 @@ int main(int argc, char **argv)
     glx_delta_encode(codes, n16, deltas);
     free(codes);
 
-    /* Step 5: write header + bit-packed signed deltas */
+    /* Step 4b: pick the designed Huffman lengths for this companding mode and
+     * build the table. The lengths are embedded in the file so the decoder is
+     * self-describing (no compiled-in table needed). */
+    GlxHuffTable htab;
+    const uint8_t *huff_len = NULL;
+    if (huff) {
+        huff_len = glx_huff_lengths_for(mulaw);
+        if (glx_huff_build(&htab, huff_len) != 0) {
+            printf("Internal error: invalid Huffman length table\n");
+            return -1;
+        }
+    }
+
+    /* Step 5: write header (+ embedded Huffman table) + coded deltas */
     FILE *outfp = fopen(argv[5], "wb");
     if (!outfp) {
         printf("Could not write to output file, Error\n");
@@ -115,18 +138,30 @@ int main(int argc, char **argv)
         .bitsPerSym = GLX_BITS,
         .alphaIdx   = (uint8_t)alphaIdx,
         .mulaw      = (uint8_t)mulaw,
+        .huff       = (uint8_t)huff,
         .seed       = seed,
         .numPackets = numPackets,
     };
     memcpy(header.magic, GLX_MAGIC, 4);
     write_glx_header(outfp, &header);
 
+    /* self-describing table: 8-byte packed code-length block after the header */
+    if (huff) {
+        uint8_t tbl[GLX_HUFF_TABLE_BYTES];
+        glx_huff_pack_lengths(huff_len, tbl);
+        fwrite(tbl, 1, sizeof tbl, outfp);
+    }
+
     BitPacker bp = {0};
     uint8_t bytebuf[8];
     for (size_t i = 0; i < n16; i++) {
-        /* deltas are in [-7, 7]; 4-bit two's complement on the wire */
-        size_t w = bitpack_write(&bp, (uint32_t)deltas[i] & 0xF,
-                                 GLX_DELTA_WIDTH, bytebuf, sizeof bytebuf);
+        /* deltas are in [-7,+7]. huff: bias to a symbol index (delta+BIAS) and
+         * emit its canonical code. raw: 4-bit two's-complement fixed field. */
+        size_t w = huff
+            ? glx_huff_encode(&bp, &htab, (uint32_t)(deltas[i] + GLX_HUFF_BIAS),
+                              bytebuf, sizeof bytebuf)
+            : bitpack_write(&bp, (uint32_t)deltas[i] & 0xF,
+                            GLX_DELTA_WIDTH, bytebuf, sizeof bytebuf);
         fwrite(bytebuf, 1, w, outfp);
     }
     size_t w = bitpack_flush(&bp, bytebuf, sizeof bytebuf);

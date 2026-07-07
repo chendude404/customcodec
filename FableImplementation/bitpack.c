@@ -14,7 +14,6 @@ boundaries.
 */
 
 /* ── Packer ─────────────────────────────────────────────────────────── */
-
 size_t bitpack_write(BitPacker *bp, uint32_t symbol, int width, uint8_t *out, size_t out_cap)
 {
     if (width <= 0 || width > 24) return 0;  // keeps bitbuf within uint32_t: 7 leftover + 24 new = 31 bits max
@@ -42,7 +41,6 @@ size_t bitpack_flush(BitPacker *bp, uint8_t *out, size_t out_cap)
 }
 
 /* ── Unpacker ───────────────────────────────────────────────────────── */
-
 void bitunpack_init(BitUnpacker *bu, const uint8_t *data, size_t len)
 {
     bu->bitbuf = 0;

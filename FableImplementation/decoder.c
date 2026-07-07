@@ -1,4 +1,5 @@
 #include "glx.h"
+#include "compression.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -23,6 +24,7 @@ static int read_glx_header(FILE *fp, GlxHeader *h)
         fread(&h->bitsPerSym, sizeof(uint8_t), 1, fp) != 1 ||
         fread(&h->alphaIdx, sizeof(uint8_t), 1, fp) != 1 ||
         fread(&h->mulaw, sizeof(uint8_t), 1, fp) != 1 ||
+        fread(&h->huff, sizeof(uint8_t), 1, fp) != 1 ||
         fread(&h->seed, sizeof(uint32_t), 1, fp) != 1 ||
         fread(&h->numPackets, sizeof(uint32_t), 1, fp) != 1)
         return -1;
@@ -48,15 +50,39 @@ int main(int argc, char **argv)
         fclose(in);
         return -1;
     }
-    printf("rate=%u bits=%u alpha=%u mulaw=%u seed=%u packets=%u\n",
-           h.sampleRate, h.bitsPerSym, h.alphaIdx, h.mulaw, h.seed, h.numPackets);
+    printf("rate=%u bits=%u alpha=%u mulaw=%u huff=%u seed=%u packets=%u\n",
+           h.sampleRate, h.bitsPerSym, h.alphaIdx, h.mulaw, h.huff, h.seed, h.numPackets);
+
+    /* If Huffman-coded, the file carries its own table: read the embedded
+     * length block and rebuild the canonical table from it (self-describing). */
+    GlxHuffTable htab;
+    if (h.huff) {
+        uint8_t tbl[GLX_HUFF_TABLE_BYTES], hlen[GLX_HUFF_NSYM];
+        if (fread(tbl, 1, sizeof tbl, in) != sizeof tbl) {
+            printf("truncated Huffman table\n");
+            fclose(in);
+            return -1;
+        }
+        glx_huff_unpack_lengths(tbl, hlen);
+        if (glx_huff_build(&htab, hlen) != 0) {
+            printf("invalid embedded Huffman table\n");
+            fclose(in);
+            return -1;
+        }
+    }
 
     size_t n = (size_t)h.numPackets * GLX_FRAMES_PER_PACKET;
 
-    /* Step 1: decompress — read the packed payload, unpack 4-bit signed
-     * deltas, then undo the delta transform to recover quantizer codes */
-    size_t payload_cap = (n * GLX_DELTA_WIDTH + 7) / 8 + 1;
-    uint8_t *payload = malloc(payload_cap);
+    /* Step 1: decompress — read the packed payload (the rest of the file, so
+     * either fixed 4-bit or variable-length Huffman fits), unpack the delta
+     * symbols per the header's huff flag, then undo the delta transform */
+    long pstart = ftell(in);
+    fseek(in, 0, SEEK_END);
+    long pend = ftell(in);
+    fseek(in, pstart, SEEK_SET);
+    size_t payload_cap = (pend > pstart) ? (size_t)(pend - pstart) : 0;
+
+    uint8_t *payload = malloc(payload_cap ? payload_cap : 1);
     int8_t  *deltas  = malloc(n);
     uint8_t *codes   = malloc(n);
     int16_t *pcm     = malloc(n * sizeof(int16_t));
@@ -71,12 +97,15 @@ int main(int argc, char **argv)
     bitunpack_init(&bu, payload, payload_len);
     for (size_t i = 0; i < n; i++) {
         uint32_t sym;
-        if (!bitunpack_read(&bu, GLX_DELTA_WIDTH, &sym)) {
+        bool ok = h.huff ? glx_huff_decode(&bu, &htab, &sym)
+                         : bitunpack_read(&bu, GLX_DELTA_WIDTH, &sym);
+        if (!ok) {
             printf("truncated payload: got %zu of %zu symbols\n", i, n);
             return -1;
         }
-        /* sign-extend 4-bit two's complement */
-        deltas[i] = (int8_t)(sym >= 8 ? (int)sym - 16 : (int)sym);
+        /* huff: sym is a biased index (delta+BIAS); raw: 4-bit two's complement */
+        deltas[i] = h.huff ? (int8_t)((int)sym - GLX_HUFF_BIAS)
+                           : (int8_t)(sym >= 8 ? (int)sym - 16 : (int)sym);
     }
     free(payload);
 

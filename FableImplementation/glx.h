@@ -18,7 +18,7 @@
 #define GLX_FRAMES_PER_PACKET 160     /* 10 ms at 16 kHz */
 #define GLX_DELTA_WIDTH       4       /* signed 4-bit deltas on the wire */
 
-/* ── .glx header (19 bytes, little-endian, same layout as before) ───── */
+/* ── .glx header (20 bytes, little-endian) ──────────────────────────── */
 
 #pragma pack(push, 1)
 typedef struct GlxHeader {
@@ -27,6 +27,7 @@ typedef struct GlxHeader {
     uint8_t  bitsPerSym;  /* 3 */
     uint8_t  alphaIdx;    /* alpha index: 1 -> 0.0, 2 -> 0.1, ... 11 -> 1.0 */
     uint8_t  mulaw;       /* 1 for mu-law companding, 0 for linear */
+    uint8_t  huff;        /* 1 = payload is Huffman-coded deltas, 0 = raw 4-bit */
     uint32_t seed;        /* dither LFSR seed */
     uint32_t numPackets;  /* total 10 ms packets (160 samples each) */
 } GlxHeader;
