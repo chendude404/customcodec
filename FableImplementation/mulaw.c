@@ -85,13 +85,24 @@ void glx_dither_init(glx_dither_state *st, uint32_t seed)
     st->lfsr = (seed != 0u) ? seed : 0xDEADBEEFu;  /* LFSR must not be 0 */
 }
 
-float glx_dither_next(glx_dither_state *st, float alpha, int bitdepth)
+float glx_dither_next(glx_dither_state *st, float alpha, int bitdepth, int ditherType)
 {
-    /* Fixed draw order — R then mask — so decoder replays identically. */
+    /* Fixed draw order — R then gate — and both draws always consumed, so
+     * the decoder replays identically for either dither type. */
     float Delta = glx_delta(bitdepth);
     float R     = (lfsr_unif(st) - 0.5f) * Delta;      /* RPDF, ±Delta/2 */
-    float mask  = (lfsr_unif(st) < alpha) ? 1.0f : 0.0f;
-    return alpha * R * mask;                           /* class 2 */
+    float gate  = lfsr_unif(st);
+
+    if (gate < alpha)                     /* prob alpha: the alpha*Pi_aD term */
+        return alpha * R;
+
+    if (ditherType == GLX_DITHER_SPIKED)
+        /* remaining (1-alpha) mass split into spikes at ±alpha*Delta/2.
+         * R is independent of the gate and sign-symmetric, so its sign is a
+         * fair coin: each spike carries probability (1-alpha)/2. */
+        return (R >= 0.0f ? 0.5f : -0.5f) * alpha * Delta;
+
+    return 0.0f;                          /* GLX_DITHER_MASKED: delta(0) */
 }
 
 /* ── Quantizer ──────────────────────────────────────────────────────── */
@@ -114,9 +125,11 @@ float glx_dequantize(uint8_t code, int bitdepth)
 
 /* ── Full pipeline ──────────────────────────────────────────────────── */
 
-int glx_encode(const int16_t *pcm, size_t n, uint8_t *codes, int bitdepth, float alpha, uint32_t seed, int mulaw)
+int glx_encode(const int16_t *pcm, size_t n, uint8_t *codes, int bitdepth, float alpha, uint32_t seed, int mulaw, int ditherType)
 {
     if (!pcm || !codes || bitdepth < 1 || bitdepth > 8 ||alpha < 0.0f || alpha > 1.0f)
+        return -1;
+    if (ditherType != GLX_DITHER_MASKED && ditherType != GLX_DITHER_SPIKED)
         return -1;
 
     glx_dither_state st;
@@ -127,7 +140,7 @@ int glx_encode(const int16_t *pcm, size_t n, uint8_t *codes, int bitdepth, float
         float x = glx_pcm16_to_float(pcm[i]);
         if (mulaw) x = glx_ulaw_compress(x);             /* compand */
         float c = x * hrf;                               /* headroom */
-        float d = glx_dither_next(&st, alpha, bitdepth); /* class-2 dither */
+        float d = glx_dither_next(&st, alpha, bitdepth, ditherType);
         codes[i] = glx_quantize(c + d, bitdepth);
     }
     return 0;
@@ -135,10 +148,12 @@ int glx_encode(const int16_t *pcm, size_t n, uint8_t *codes, int bitdepth, float
 
 int glx_decode(const uint8_t *codes, size_t n,
                int16_t *pcm,
-               int bitdepth, float alpha, uint32_t seed, int mulaw)
+               int bitdepth, float alpha, uint32_t seed, int mulaw, int ditherType)
 {
     if (!codes || !pcm || bitdepth < 1 || bitdepth > 8 ||
         alpha < 0.0f || alpha > 1.0f)
+        return -1;
+    if (ditherType != GLX_DITHER_MASKED && ditherType != GLX_DITHER_SPIKED)
         return -1;
 
     glx_dither_state st;
@@ -147,7 +162,7 @@ int glx_decode(const uint8_t *codes, size_t n,
 
     for (size_t i = 0; i < n; i++) {
         float q = glx_dequantize(codes[i], bitdepth);
-        float d = glx_dither_next(&st, alpha, bitdepth);
+        float d = glx_dither_next(&st, alpha, bitdepth, ditherType);
         float c = (q - d) / hrf;                /* subtract, undo headroom */
         if (mulaw) c = glx_ulaw_expand(c);
         pcm[i] = glx_float_to_pcm16(c);

@@ -18,7 +18,12 @@
 #define GLX_FRAMES_PER_PACKET 160     /* 10 ms at 16 kHz */
 #define GLX_DELTA_WIDTH       4       /* signed 4-bit deltas on the wire */
 
-/* ── .glx header (20 bytes, little-endian) ──────────────────────────── */
+/* Dither PDF selector (CLI arg + header field) */
+#define GLX_DITHER_MASKED     1       /* alpha*Pi_aD(v) + (1-alpha)*delta(v) */
+#define GLX_DITHER_SPIKED     2       /* alpha*Pi_aD(v) + ((1-alpha)/2)*
+                                       * [delta(v - aD/2) + delta(v + aD/2)] */
+
+/* ── .glx header (21 bytes, little-endian) ──────────────────────────── */
 
 #pragma pack(push, 1)
 typedef struct GlxHeader {
@@ -28,6 +33,7 @@ typedef struct GlxHeader {
     uint8_t  alphaIdx;    /* alpha index: 1 -> 0.0, 2 -> 0.1, ... 11 -> 1.0 */
     uint8_t  mulaw;       /* 1 for mu-law companding, 0 for linear */
     uint8_t  huff;        /* 1 = payload is Huffman-coded deltas, 0 = raw 4-bit */
+    uint8_t  ditherType;  /* GLX_DITHER_MASKED (1) or GLX_DITHER_SPIKED (2) */
     uint32_t seed;        /* dither LFSR seed */
     uint32_t numPackets;  /* total 10 ms packets (160 samples each) */
 } GlxHeader;
@@ -50,7 +56,7 @@ int16_t glx_float_to_pcm16(float x);
 float glx_ulaw_compress(float x);
 float glx_ulaw_expand(float y);
 
-/* Minimal headroom for class-2 (masked+scaled) dither:
+/* Minimal headroom for the dither: both PDFs peak at ±alpha*Delta/2, so
  *   hrf = 1 - alpha * Delta / 2,   Delta = 2 / 2^bitdepth */
 float glx_headroom_factor(float alpha, int bitdepth);
 
@@ -64,19 +70,25 @@ typedef struct {
     uint32_t lfsr;   /* must be nonzero */
 } glx_dither_state;
 
+/* One dither sample. ditherType selects the PDF:
+ *   GLX_DITHER_MASKED: alpha*Pi_aD(v) + (1-alpha)*delta(v)
+ *   GLX_DITHER_SPIKED: alpha*Pi_aD(v)
+ *                      + ((1-alpha)/2) * [delta(v - aD/2) + delta(v + aD/2)]
+ * Both types consume exactly two LFSR draws per sample, so encoder and
+ * decoder stay in lockstep for either choice. */
 void  glx_dither_init(glx_dither_state *st, uint32_t seed);
-float glx_dither_next(glx_dither_state *st, float alpha, int bitdepth);
+float glx_dither_next(glx_dither_state *st, float alpha, int bitdepth, int ditherType);
 
 uint8_t glx_quantize(float x, int bitdepth);
 float   glx_dequantize(uint8_t code, int bitdepth);
 
 /* Encode: pcm16 -> normalize -> [mu-law if mulaw] -> *hrf -> +dither -> quantize.
  * Decode: dequantize -> -dither -> /hrf -> [mu-law expand if mulaw] -> pcm16.
- * Must be called with the same bitdepth/alpha/seed/mulaw on both sides. */
+ * Must be called with the same bitdepth/alpha/seed/mulaw/ditherType on both sides. */
 int glx_encode(const int16_t *pcm, size_t n, uint8_t *codes,
-               int bitdepth, float alpha, uint32_t seed, int mulaw);
+               int bitdepth, float alpha, uint32_t seed, int mulaw, int ditherType);
 int glx_decode(const uint8_t *codes, size_t n, int16_t *pcm,
-               int bitdepth, float alpha, uint32_t seed, int mulaw);
+               int bitdepth, float alpha, uint32_t seed, int mulaw, int ditherType);
 
 /* Delta transform for the compression stage (first element kept as-is,
  * rest become successive differences). */

@@ -13,11 +13,12 @@ gcc -O2 -Wall -Wextra -o glxdecode.exe decoder.c mulaw.c bitpack.c wav.c compres
 ## Usage
 
 ```sh
-# encode: ./our.exe our.wav alpha seed mulaw out.glx [huff]
-./our.exe input48k.wav 6 12345 1 out.glx     # alpha idx 6 (=0.5), seed 12345, mu-law on, Huffman on
-./our.exe input48k.wav 6 12345 1 out.glx 0   # huff=0: raw 4-bit deltas (no entropy coding)
+# encode: ./our.exe our.wav alpha seed mulaw dither out.glx [huff]
+./our.exe input48k.wav 6 12345 1 1 out.glx     # alpha idx 6 (=0.5), seed 12345, mu-law on, masked dither, Huffman on
+./our.exe input48k.wav 6 12345 1 2 out.glx     # dither=2: spiked dither PDF
+./our.exe input48k.wav 6 12345 1 1 out.glx 0   # huff=0: raw 4-bit deltas (no entropy coding)
 
-# decode: ./glxdecode.exe in.glx out.wav   (reads the huff flag from the header)
+# decode: ./glxdecode.exe in.glx out.wav   (reads the huff + dither flags from the header)
 ./glxdecode.exe out.glx out.wav
 ```
 
@@ -26,6 +27,16 @@ gcc -O2 -Wall -Wextra -o glxdecode.exe decoder.c mulaw.c bitpack.c wav.c compres
 - `seed` — LFSR seed; the decoder regenerates the identical dither stream
   from the seed stored in the header (subtractive dithering)
 - `mulaw` — `1` for µ-law companding, `0` for linear
+- `dither` — selects the dither PDF (stored in the header so the decoder
+  regenerates and subtracts the exact same stream):
+  - `1` (masked RPDF): `f(v) = α·Π_αΔ(v) + (1−α)·δ(v)` — with probability α
+    the dither is uniform over ±αΔ/2, otherwise it is 0
+  - `2` (spiked): `f(v) = α·Π_αΔ(v) + ((1−α)/2)·[δ(v − αΔ/2) + δ(v + αΔ/2)]`
+    — same uniform part, but the remaining (1−α) mass is split into two
+    equal spikes at ±αΔ/2 instead of sitting at 0
+  - both PDFs peak at ±αΔ/2, so the headroom factor is identical, and both
+    consume exactly two LFSR draws per sample, so `dither=1` output is
+    bit-identical to the previous format (apart from the new header byte)
 - `huff` (optional, default `1`) — `1` Huffman-codes the delta stream,
   `0` stores raw 4-bit deltas. The decoder picks the path from the header.
 - Input must be a **48 kHz** 16-bit PCM WAV (mono or stereo); this is a
@@ -34,7 +45,7 @@ gcc -O2 -Wall -Wextra -o glxdecode.exe decoder.c mulaw.c bitpack.c wav.c compres
 ## Pipeline
 
 **Encoder**: read WAV → downmix stereo → box-filter decimate 48 kHz → 16 kHz
-→ [µ-law compress if `mulaw`] → headroom scale → class-2 dither → 3-bit
+→ [µ-law compress if `mulaw`] → headroom scale → dither (type 1 or 2) → 3-bit
 midrise quantize → delta transform → [Huffman-code deltas if `huff`, else
 bit-pack 4-bit signed deltas] → `.glx`
 
@@ -44,7 +55,7 @@ undo headroom → [µ-law expand if `mulaw`] → 16 kHz mono 16-bit WAV
 
 ## .glx layout (little-endian)
 
-**Fixed 20-byte header:**
+**Fixed 21-byte header:**
 
 | offset | field | type |
 |---|---|---|
@@ -54,8 +65,12 @@ undo headroom → [µ-law expand if `mulaw`] → 16 kHz mono 16-bit WAV
 | 9 | alphaIdx | u8 |
 | 10 | mulaw | u8 |
 | 11 | huff (1 = Huffman, 0 = raw 4-bit) | u8 |
-| 12 | seed | u32 |
-| 16 | numPackets | u32 |
+| 12 | ditherType (1 = masked RPDF, 2 = spiked) | u8 |
+| 13 | seed | u32 |
+| 17 | numPackets | u32 |
+
+(The `ditherType` byte was inserted at offset 12; `.glx` files written before
+this change have a 20-byte header and must be re-encoded.)
 
 **Embedded Huffman table (8 bytes, only when `huff=1`):** the 15 per-symbol
 code lengths, packed as nibbles (MSB-first, symbol index = `delta + 7`). This
@@ -103,7 +118,7 @@ Every symbol gets a code, so any delta is always encodable at any settings.
 
 | new file | refactored from |
 |---|---|
-| `mulaw.c` | `../mulaw.c` — float µ-law + LFSR dither + quantizer + delta transform, unchanged except `glx_encode`/`glx_decode` now take a `mulaw` flag so the linear path shares the same dither/headroom machinery |
+| `mulaw.c` | `../mulaw.c` — float µ-law + LFSR dither + quantizer + delta transform, unchanged except `glx_encode`/`glx_decode` now take `mulaw` and `ditherType` flags so the linear path and both dither PDFs share the same dither/headroom machinery |
 | `bitpack.c` | packer from `../sampling.c`, unpacker from `../decompress.c`, merged |
 | `wav.c` | chunk-walking reader from `../top.c` `readfile()` + `../claudius.c`; writer from `../glxdecode.c` |
 | `encoder.c` | `../top.c` main flow (arg parsing, downmix, decimate, header write) |

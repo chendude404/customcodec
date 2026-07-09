@@ -25,6 +25,7 @@ static int read_glx_header(FILE *fp, GlxHeader *h)
         fread(&h->alphaIdx, sizeof(uint8_t), 1, fp) != 1 ||
         fread(&h->mulaw, sizeof(uint8_t), 1, fp) != 1 ||
         fread(&h->huff, sizeof(uint8_t), 1, fp) != 1 ||
+        fread(&h->ditherType, sizeof(uint8_t), 1, fp) != 1 ||
         fread(&h->seed, sizeof(uint32_t), 1, fp) != 1 ||
         fread(&h->numPackets, sizeof(uint32_t), 1, fp) != 1)
         return -1;
@@ -50,8 +51,9 @@ int main(int argc, char **argv)
         fclose(in);
         return -1;
     }
-    printf("rate=%u bits=%u alpha=%u mulaw=%u huff=%u seed=%u packets=%u\n",
-           h.sampleRate, h.bitsPerSym, h.alphaIdx, h.mulaw, h.huff, h.seed, h.numPackets);
+    printf("rate=%u bits=%u alpha=%u mulaw=%u huff=%u dither=%u seed=%u packets=%u\n",
+           h.sampleRate, h.bitsPerSym, h.alphaIdx, h.mulaw, h.huff,
+           h.ditherType, h.seed, h.numPackets);
 
     /* If Huffman-coded, the file carries its own table: read the embedded
      * length block and rebuild the canonical table from it (self-describing). */
@@ -114,7 +116,7 @@ int main(int argc, char **argv)
 
     /* Step 2+3: dequantize -> subtract dither -> [mu-law expand] -> pcm16 */
     float alpha = glx_alpha_from_idx(h.alphaIdx);
-    if (glx_decode(codes, n, pcm, h.bitsPerSym, alpha, h.seed, h.mulaw) != 0) {
+    if (glx_decode(codes, n, pcm, h.bitsPerSym, alpha, h.seed, h.mulaw, h.ditherType) != 0) {
         printf("Decode failed (bad header parameters)\n");
         return -1;
     }

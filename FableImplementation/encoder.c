@@ -6,10 +6,12 @@
 /*
 GLX ENCODER
 ===========
-Usage: ./our.exe our.wav alpha seed mulaw out.glx
-         alpha — dither index (1 -> 0.0, 2 -> 0.1, ... 11 -> 1.0)
-         seed  — LFSR seed for the subtractive dither
-         mulaw — 1 for mu-law companding, 0 for linear
+Usage: ./our.exe our.wav alpha seed mulaw dither out.glx
+         alpha  — dither index (1 -> 0.0, 2 -> 0.1, ... 11 -> 1.0)
+         seed   — LFSR seed for the subtractive dither
+         mulaw  — 1 for mu-law companding, 0 for linear
+         dither — 1 = masked RPDF (zero when masked),
+                  2 = spiked: the masked (1-alpha) mass sits at ±alpha*Delta/2
 
 Pipeline: read .wav -> resample 48 kHz -> 16 kHz -> [mu-law compress]
           -> dither -> quantize to 3 bits -> delta compress -> write .glx
@@ -29,16 +31,17 @@ static void write_glx_header(FILE *fp, const GlxHeader *h)
     fwrite(&h->alphaIdx, sizeof(uint8_t), 1, fp);
     fwrite(&h->mulaw, sizeof(uint8_t), 1, fp);
     fwrite(&h->huff, sizeof(uint8_t), 1, fp);
+    fwrite(&h->ditherType, sizeof(uint8_t), 1, fp);
     fwrite(&h->seed, sizeof(uint32_t), 1, fp);
     fwrite(&h->numPackets, sizeof(uint32_t), 1, fp);
 }
 
 int main(int argc, char **argv)
 {
-    /* ./our.exe our.wav alpha seed mulaw out.glx [huff]
+    /* ./our.exe our.wav alpha seed mulaw dither out.glx [huff]
      * huff (optional): 1 = Huffman-code the deltas (default), 0 = raw 4-bit */
-    if (argc != 6 && argc != 7) {
-        printf("call of format ./our.exe our.wav alpha seed mulaw out.glx [huff]\n");
+    if (argc != 7 && argc != 8) {
+        printf("call of format ./our.exe our.wav alpha seed mulaw dither out.glx [huff]\n");
         return -1;
     }
 
@@ -59,10 +62,17 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    int huff = (argc == 7) ? atoi(argv[6]) : 1;   /* default: entropy-code */
+    int ditherType = atoi(argv[5]);
+    if (ditherType != GLX_DITHER_MASKED && ditherType != GLX_DITHER_SPIKED)
+    {
+        printf("Argv[5] (dither) must be 1 (masked RPDF) or 2 (spiked)\n");
+        return -1;
+    }
+
+    int huff = (argc == 8) ? atoi(argv[7]) : 1;   /* default: entropy-code */
     if (huff != 1 && huff != 0)
     {
-        printf("Argv[6] (huff) must be 1 (Huffman) or 0 (raw 4-bit)\n");
+        printf("Argv[7] (huff) must be 1 (Huffman) or 0 (raw 4-bit)\n");
         return -1;
     }
     //good thus far
@@ -102,7 +112,7 @@ int main(int argc, char **argv)
 
     /* Step 3: [mu-law] -> dither -> quantize to 3 bits */
     float alpha = glx_alpha_from_idx(alphaIdx);
-    if (glx_encode(pcm16k, n16, codes, GLX_BITS, alpha, seed, mulaw) != 0) {
+    if (glx_encode(pcm16k, n16, codes, GLX_BITS, alpha, seed, mulaw, ditherType) != 0) {
         printf("Encode failed (bad parameters)\n");
         return -1;
     }
@@ -126,12 +136,12 @@ int main(int argc, char **argv)
     }
 
     /* Step 5: write header (+ embedded Huffman table) + coded deltas */
-    FILE *outfp = fopen(argv[5], "wb");
+    FILE *outfp = fopen(argv[6], "wb");
     if (!outfp) {
         printf("Could not write to output file, Error\n");
         return -1;
     }
-    printf("We are writing to output file %s\n", argv[5]);
+    printf("We are writing to output file %s\n", argv[6]);
 
     GlxHeader header = {
         .sampleRate = GLX_OUT_RATE,
@@ -139,6 +149,7 @@ int main(int argc, char **argv)
         .alphaIdx   = (uint8_t)alphaIdx,
         .mulaw      = (uint8_t)mulaw,
         .huff       = (uint8_t)huff,
+        .ditherType = (uint8_t)ditherType,
         .seed       = seed,
         .numPackets = numPackets,
     };
@@ -170,6 +181,6 @@ int main(int argc, char **argv)
     fclose(outfp);
 
     printf("wrote %u packets (%zu samples, %.2f s) to %s\n",
-           numPackets, n16, (double)n16 / GLX_OUT_RATE, argv[5]);
+           numPackets, n16, (double)n16 / GLX_OUT_RATE, argv[6]);
     return EXIT_SUCCESS;
 }
