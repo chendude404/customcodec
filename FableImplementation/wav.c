@@ -3,12 +3,15 @@
 #include <string.h>
 
 /*
-WAV reader refactored from the chunk-walker in ../top.c (readfile) and
-../claudius.c; writer from ../glxdecode.c. Only 16-bit PCM is supported,
-stereo is downmixed to mono the same way ../top.c did (s[2i]/2 + s[2i+1]/2).
+Streaming WAV I/O. The chunk-walking header parse is the same as before
+(from ../top.c readfile / ../claudius.c); the whole-file read/write pair
+was replaced by open/read/close + open/write/close so the codec can run
+one 10 ms packet at a time — the target device may not have enough RAM
+to hold a whole file. Only 16-bit PCM is supported; stereo is downmixed
+to mono the same way ../top.c did (s[2i]/2 + s[2i+1]/2).
 */
 //Code Reviewed 7/6/2026
-static int read_u32le(FILE *f, uint32_t *out) 
+static int read_u32le(FILE *f, uint32_t *out)
 {
     uint8_t b[4];
     if (fread(b, 1, 4, f) != 4) return -1;
@@ -17,7 +20,7 @@ static int read_u32le(FILE *f, uint32_t *out)
     return 0;
 }
 
-static int read_u16le(FILE *f, uint16_t *out) 
+static int read_u16le(FILE *f, uint16_t *out)
 {
     uint8_t b[2];
     if (fread(b, 1, 2, f) != 2) return -1;
@@ -40,14 +43,18 @@ static void write_le32(FILE *f, uint32_t v)
 }
 //correct above ^^
 
-int16_t *wav_read_mono16(const char *path, uint32_t *rate_out, size_t *n_out)
+/* ── Reader ─────────────────────────────────────────────────────────── */
+
+int wav_reader_open(WavReader *r, const char *path)
 {
+    memset(r, 0, sizeof *r);
+
     FILE *fp = fopen(path, "rb");
     if (!fp) {
         printf("Can't open file %s, exiting\n", path);
-        return NULL;
+        return -1;
     }
-    //reads wav header 
+    //reads wav header
     char id[4];
     uint32_t sz;
     if (fread(id, 1, 4, fp) != 4 || memcmp(id, "RIFF", 4) != 0 ||
@@ -55,7 +62,7 @@ int16_t *wav_read_mono16(const char *path, uint32_t *rate_out, size_t *n_out)
         fread(id, 1, 4, fp) != 4 || memcmp(id, "WAVE", 4) != 0) {
         printf("Incorrect File Format: not a RIFF/WAVE file\n");
         fclose(fp);
-        return NULL;
+        return -1;
     }
     //kk
 
@@ -86,75 +93,95 @@ int16_t *wav_read_mono16(const char *path, uint32_t *rate_out, size_t *n_out)
         if (sz & 1) fseek(fp, 1, SEEK_CUR);
     }
 
-    if (!have_fmt || !have_data) 
+    if (!have_fmt || !have_data)
     {
         printf("Missing fmt or data chunk\n");
         fclose(fp);
-        return NULL;
+        return -1;
     }
-    if (audioFormat != 1) 
+    if (audioFormat != 1)
     {
         printf("Cannot yet decode non-PCM files\n");
         fclose(fp);
-        return NULL;
+        return -1;
     }
-    if (bitsPerSample != 16) 
+    if (bitsPerSample != 16)
     {
         printf("Can only process 16 bit audio atm\n");
         fclose(fp);
-        return NULL;
+        return -1;
     }
     if (numChannels != 1 && numChannels != 2) {
         printf("Only mono or stereo input is supported\n");
         fclose(fp);
-        return NULL;
+        return -1;
     }
     //numframes is total length of audio * 48khz should be
     size_t numframes = dataBytes / blockAlign;
     printf("Audio Channels = %u\n", numChannels);
     printf("sample bit depth = %u\n", bitsPerSample);
     printf("We have %zu frames in this data\n", numframes);
-    //nah need to fix. shouldn't do the whole thing at once....
-    //no real time compatability then
-    int16_t *mono = malloc(numframes * sizeof(int16_t));
-    if(!mono) 
-    {
-        fclose(fp);
-        return NULL;
-    }
 
-    if(numChannels == 1) 
-    {
-        numframes = fread(mono, sizeof(int16_t), numframes, fp);
-    } 
-    else 
-    {
-        int16_t frame[2];
-        size_t got = 0;
-        while (got < numframes && fread(frame, sizeof(int16_t), 2, fp) == 2) {
-            mono[got++] = frame[0] / 2 + frame[1] / 2;  /* downmix */
-        }
-        numframes = got;
-    }
-
-    fclose(fp);
-    *rate_out = sampleRate;
-    *n_out = numframes;
-    return mono;
+    r->fp = fp;
+    r->channels = numChannels;
+    r->rate = sampleRate;
+    r->framesTotal = numframes;
+    r->framesRead = 0;
+    return 0;
 }
-//check with wav header format TODO
-int wav_write_mono16(const char *path, const int16_t *pcm, size_t n, uint32_t rate)
+
+size_t wav_reader_read(WavReader *r, int16_t *mono, size_t nframes)
 {
+    if (!r->fp) return 0;
+
+    size_t left = r->framesTotal - r->framesRead;
+    if (nframes > left) nframes = left;   /* never read past the data chunk */
+
+    size_t got = 0;
+    if (r->channels == 1)
+    {
+        got = fread(mono, sizeof(int16_t), nframes, r->fp);
+    }
+    else
+    {
+        /* downmix on the fly through a small fixed buffer */
+        int16_t frames[2 * 64];
+        while (got < nframes) {
+            size_t want = nframes - got;
+            if (want > 64) want = 64;
+            size_t rd = fread(frames, 2 * sizeof(int16_t), want, r->fp);
+            for (size_t i = 0; i < rd; i++)
+                mono[got + i] = frames[2*i] / 2 + frames[2*i + 1] / 2;
+            got += rd;
+            if (rd < want) break;   /* short file */
+        }
+    }
+    r->framesRead += got;
+    return got;
+}
+
+void wav_reader_close(WavReader *r)
+{
+    if (r->fp) fclose(r->fp);
+    r->fp = NULL;
+}
+
+/* ── Writer ─────────────────────────────────────────────────────────── */
+
+int wav_writer_open(WavWriter *w, const char *path, uint32_t rate)
+{
+    memset(w, 0, sizeof *w);
+
     FILE *out = fopen(path, "wb");
-    if(!out) 
+    if(!out)
     {
         printf("cannot write %s\n", path);
         return -1;
     }
 
-    uint32_t dataBytes = (uint32_t)(n * 2);
+    /* sizes are placeholders (0 samples); wav_writer_close patches them */
     fwrite("RIFF", 1, 4, out);
-    write_le32(out, 36 + dataBytes);
+    write_le32(out, 36);
     fwrite("WAVE", 1, 4, out);
     fwrite("fmt ", 1, 4, out);
     write_le32(out, 16);
@@ -165,11 +192,36 @@ int wav_write_mono16(const char *path, const int16_t *pcm, size_t n, uint32_t ra
     write_le16(out, 2);            /* block align */
     write_le16(out, 16);           /* bits per sample */
     fwrite("data", 1, 4, out);
-    write_le32(out, dataBytes);
+    write_le32(out, 0);
 
-    for (size_t i = 0; i < n; i++)
-        write_le16(out, (uint16_t)pcm[i]);
-
-    fclose(out);
+    w->fp = out;
+    w->framesWritten = 0;
     return 0;
+}
+
+int wav_writer_write(WavWriter *w, const int16_t *pcm, size_t n)
+{
+    if (!w->fp) return -1;
+    for (size_t i = 0; i < n; i++)
+        write_le16(w->fp, (uint16_t)pcm[i]);
+    w->framesWritten += n;
+    return ferror(w->fp) ? -1 : 0;
+}
+
+int wav_writer_close(WavWriter *w)
+{
+    if (!w->fp) return -1;
+
+    /* patch the RIFF size (offset 4) and data chunk size (offset 40) */
+    uint32_t dataBytes = (uint32_t)(w->framesWritten * 2);
+    int rc = 0;
+    if (fseek(w->fp, 4, SEEK_SET) != 0) rc = -1;
+    write_le32(w->fp, 36 + dataBytes);
+    if (fseek(w->fp, 40, SEEK_SET) != 0) rc = -1;
+    write_le32(w->fp, dataBytes);
+    if (ferror(w->fp)) rc = -1;
+
+    fclose(w->fp);
+    w->fp = NULL;
+    return rc;
 }

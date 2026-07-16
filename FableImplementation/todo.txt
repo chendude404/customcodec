@@ -1,3 +1,4 @@
-1) buffer the processing for Real Time processing possibilities
-2) add a Cyclic Redundancy Check
+1) buffer the processing for Real Time processing possibilities [✓] (10ms packets, fixed stack buffers, state carried across packets)
+2) add a Cyclic Redundancy Check for the GLX Header -> check in encoder and decoder
 3) Consider Real Time analysis -> FPGA conversion
+4) Create a Python Wrapper to convert large amounts of audio for training [✓]

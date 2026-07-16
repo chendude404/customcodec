@@ -1,5 +1,5 @@
 #include "compression.h"
-#include "glx_huff_tables.h"   /* generated: glx_huff_len_mu1[], glx_huff_len_mu0[] */
+#include "glx_huff_tables.h"   /* generated: glx_huff_len_b{1,2,3}_mu{0,1}[] */
 
 /*
 Canonical Huffman for the delta alphabet. All tables (encode codes + decode
@@ -8,9 +8,16 @@ whether the lengths come from the designed static tables or from the length
 block embedded in a .glx file. See compression.h for the overall flow.
 */
 
-const uint8_t *glx_huff_lengths_for(int mulaw)
+const uint8_t *glx_huff_lengths_for(int bitdepth, int mulaw)
 {
-    return mulaw ? glx_huff_len_mu1 : glx_huff_len_mu0;
+    static const uint8_t *tbl[3][2] = 
+    {
+        { glx_huff_len_b1_mu0, glx_huff_len_b1_mu1 },
+        { glx_huff_len_b2_mu0, glx_huff_len_b2_mu1 },
+        { glx_huff_len_b3_mu0, glx_huff_len_b3_mu1 },
+    };
+    if (bitdepth < GLX_BITS_MIN || bitdepth > GLX_BITS_MAX) return NULL;
+    return tbl[bitdepth - 1][mulaw ? 1 : 0];
 }
 
 int glx_huff_build(GlxHuffTable *t, const uint8_t len[GLX_HUFF_NSYM])
@@ -24,9 +31,19 @@ int glx_huff_build(GlxHuffTable *t, const uint8_t len[GLX_HUFF_NSYM])
     if (maxlen < 1) return -1;
     t->maxlen = maxlen;
 
-    for (int l = 0; l <= maxlen; l++) t->count[l] = 0;
+    for (int l = 0; l <= maxlen; l++) 
+    {
+        t->count[l] = 0;
+    }
+        
     for (int i = 0; i < GLX_HUFF_NSYM; i++)
-        if (len[i] > 0) t->count[len[i]]++;
+    {
+        if (len[i] > 0)
+        {
+            t->count[len[i]]++;
+        } 
+    }
+        
 
     /* Kraft equality: a complete prefix code satisfies
      * sum_l count[l] * 2^(maxlen-l) == 2^maxlen. Reject anything else. */

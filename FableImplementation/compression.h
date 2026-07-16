@@ -12,8 +12,8 @@ the decode tables are rebuilt from lengths by glx_huff_build() on BOTH sides. So
 a .glx can carry its own 8-byte length block and be self-describing: the decoder
 never needs a table baked in at compile time.
 
-Encoder path: pick designed lengths via glx_huff_lengths_for(mulaw) -> build ->
-embed with glx_huff_pack_lengths -> encode each symbol.
+Encoder path: pick designed lengths via glx_huff_lengths_for(bitdepth, mulaw)
+-> build -> embed with glx_huff_pack_lengths -> encode each symbol.
 Decoder path: unpack the embedded lengths -> build -> decode each symbol.
 */
 
@@ -34,8 +34,12 @@ typedef struct {
  * Returns 0 on success, -1 if the lengths are not a complete prefix code. */
 int glx_huff_build(GlxHuffTable *t, const uint8_t len[GLX_HUFF_NSYM]);
 
-/* The designed static length table for a companding mode (mulaw 0 or 1). */
-const uint8_t *glx_huff_lengths_for(int mulaw);
+/* The designed static length table for a bit depth (GLX_BITS_MIN..MAX) and
+ * companding mode (mulaw 0 or 1). The alphabet is always the full 15 symbols
+ * — at lower depths the outer deltas just never occur — so the embedded
+ * table block stays 8 bytes for every depth. Returns NULL if bitdepth is
+ * out of range. */
+const uint8_t *glx_huff_lengths_for(int bitdepth, int mulaw);
 
 /* Wire (de)serialization of the length table: 15 nibbles <-> 8 bytes. */
 void glx_huff_pack_lengths(const uint8_t len[GLX_HUFF_NSYM],

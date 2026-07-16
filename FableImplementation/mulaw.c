@@ -38,7 +38,7 @@ float glx_ulaw_expand(float y) //[✓]
     return s * expm1f(fabsf(y) * LNMU) / GLX_MU; 
 }
 
-/* ── Headroom ───────────────────────────────────────────────────────── */
+
 //we need to compute a headroom factor before applying dithering to MU LAW
 static float glx_delta(int bitdepth)
 {
@@ -125,22 +125,22 @@ float glx_dequantize(uint8_t code, int bitdepth)
 
 /* ── Full pipeline ──────────────────────────────────────────────────── */
 
-int glx_encode(const int16_t *pcm, size_t n, uint8_t *codes, int bitdepth, float alpha, uint32_t seed, int mulaw, int ditherType)
+int glx_encode(const int16_t *pcm, size_t n, uint8_t *codes, int bitdepth, float alpha, glx_dither_state *st, int mulaw, int ditherType)
 {
-    if (!pcm || !codes || bitdepth < 1 || bitdepth > 8 ||alpha < 0.0f || alpha > 1.0f)
+    if (!pcm || !codes || !st || bitdepth < 1 || bitdepth > 8 ||alpha < 0.0f || alpha > 1.0f)
         return -1;
     if (ditherType != GLX_DITHER_MASKED && ditherType != GLX_DITHER_SPIKED)
         return -1;
 
-    glx_dither_state st;
-    glx_dither_init(&st, seed);
+    /* st is caller-owned (init once, feed packet by packet) so the LFSR
+     * runs unbroken across 10 ms packets */
     float hrf = glx_headroom_factor(alpha, bitdepth);
 
     for (size_t i = 0; i < n; i++) {
         float x = glx_pcm16_to_float(pcm[i]);
         if (mulaw) x = glx_ulaw_compress(x);             /* compand */
         float c = x * hrf;                               /* headroom */
-        float d = glx_dither_next(&st, alpha, bitdepth, ditherType);
+        float d = glx_dither_next(st, alpha, bitdepth, ditherType);
         codes[i] = glx_quantize(c + d, bitdepth);
     }
     return 0;
@@ -148,21 +148,19 @@ int glx_encode(const int16_t *pcm, size_t n, uint8_t *codes, int bitdepth, float
 
 int glx_decode(const uint8_t *codes, size_t n,
                int16_t *pcm,
-               int bitdepth, float alpha, uint32_t seed, int mulaw, int ditherType)
+               int bitdepth, float alpha, glx_dither_state *st, int mulaw, int ditherType)
 {
-    if (!codes || !pcm || bitdepth < 1 || bitdepth > 8 ||
+    if (!codes || !pcm || !st || bitdepth < 1 || bitdepth > 8 ||
         alpha < 0.0f || alpha > 1.0f)
         return -1;
     if (ditherType != GLX_DITHER_MASKED && ditherType != GLX_DITHER_SPIKED)
         return -1;
 
-    glx_dither_state st;
-    glx_dither_init(&st, seed);                 /* same seed → same stream */
     float hrf = glx_headroom_factor(alpha, bitdepth);
 
     for (size_t i = 0; i < n; i++) {
         float q = glx_dequantize(codes[i], bitdepth);
-        float d = glx_dither_next(&st, alpha, bitdepth, ditherType);
+        float d = glx_dither_next(st, alpha, bitdepth, ditherType);
         float c = (q - d) / hrf;                /* subtract, undo headroom */
         if (mulaw) c = glx_ulaw_expand(c);
         pcm[i] = glx_float_to_pcm16(c);
@@ -172,21 +170,24 @@ int glx_decode(const uint8_t *codes, size_t n,
 
 /* ── Delta transform for the compression stage ──────────────────────── */
 
-void glx_delta_encode(const uint8_t *codes, size_t n, int8_t *deltas)
+/* prev carries the predictor across packets: -1 means "start of stream"
+ * (first symbol is the absolute code), so feeding N packets one at a time
+ * produces the exact byte stream the old whole-file pass did. */
+
+void glx_delta_encode(const uint8_t *codes, size_t n, int8_t *deltas, int *prev)
 {
-    if (n == 0) return;
-    deltas[0] = (int8_t)codes[0];               /* codes fit in 8 bits */
-    for (size_t i = 1; i < n; i++)
-        deltas[i] = (int8_t)((int)codes[i] - (int)codes[i - 1]);
+    for (size_t i = 0; i < n; i++) {
+        int c = codes[i];                       /* codes fit in 8 bits */
+        deltas[i] = (*prev < 0) ? (int8_t)c : (int8_t)(c - *prev);
+        *prev = c;
+    }
 }
 
-void glx_delta_decode(const int8_t *deltas, size_t n, uint8_t *codes)
+void glx_delta_decode(const int8_t *deltas, size_t n, uint8_t *codes, int *prev)
 {
-    if (n == 0) return;
-    int acc = deltas[0];
-    codes[0] = (uint8_t)acc;
-    for (size_t i = 1; i < n; i++) {
-        acc += deltas[i];
+    for (size_t i = 0; i < n; i++) {
+        int acc = (*prev < 0) ? deltas[i] : *prev + deltas[i];
         codes[i] = (uint8_t)acc;
+        *prev = acc;
     }
 }

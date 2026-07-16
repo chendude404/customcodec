@@ -2,7 +2,7 @@
 """
 glx_batch.py — Python harness for the .glx codec (FableImplementation/our.exe).
 
-The C encoder (`our.exe our.wav alpha seed mulaw dither out.glx`) accepts ONLY
+The C encoder (`our.exe our.wav alpha seed bitdepth dither out.glx`) accepts ONLY
 48 kHz / 16-bit PCM WAV (mono or stereo). This wrapper uses ffprobe/ffmpeg to
 condition an arbitrary pile of .wav files to meet that contract, then runs each
 through the encoder:
@@ -26,7 +26,7 @@ Options:
     -o, --outdir DIR   where .glx files are written        (default: ./glx_out)
     --alpha N          dither index 1->0.0 .. 11->1.0       (default: 6  = 0.5)
     --seed N           LFSR dither seed, must be nonzero    (default: 12345)
-    --mulaw {0,1}      1 = mu-law companding, 0 = linear    (default: 1)
+    --bits {1,2,3}     quantizer bits per sample            (default: 3)
     --dither {1,2}     1 = masked RPDF, 2 = spiked          (default: 1)
     --exe PATH         path to encoder (default: our.exe next to this script)
     --ffmpeg PATH      ffmpeg binary                        (default: ffmpeg)
@@ -132,10 +132,10 @@ def process_one(src, args, tmpdir):
             f"{in_rate or '?'}Hz {in_ch or '?'}ch "
             f"-> 48000/16 {out_ch or '?'}ch")
 
-    # encode: our.exe wav alpha seed mulaw dither out.glx
+    # encode: our.exe wav alpha seed bitdepth dither out.glx
     out_glx = os.path.join(args.outdir, base + ".glx")
     cmd = [args.exe, wav48, str(args.alpha), str(args.seed),
-           str(args.mulaw), str(args.dither), out_glx]
+           str(args.bits), str(args.dither), out_glx]
     enc = subprocess.run(cmd, capture_output=True, text=True)
 
     if not args.keep_wav:
@@ -195,7 +195,8 @@ def main(argv=None):
     ap.add_argument("-o", "--outdir", default="glx_out", help="output directory")
     ap.add_argument("--alpha", type=int, default=6, help="dither index 1..11")
     ap.add_argument("--seed", type=int, default=12345, help="dither seed (nonzero)")
-    ap.add_argument("--mulaw", type=int, choices=(0, 1), default=1)
+    ap.add_argument("--bits", type=int, choices=(1, 2, 3), default=3,
+                    help="quantizer bits per sample (mu-law is always on)")
     ap.add_argument("--dither", type=int, choices=(1, 2), default=1,
                     help="dither PDF: 1 = masked RPDF, 2 = spiked")
     ap.add_argument("--exe", default=None,
