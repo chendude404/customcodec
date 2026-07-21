@@ -128,11 +128,12 @@ int main(int argc, char **argv)
     // --- GLX header (14 bytes): magic[4], sampleRate u32, bitsPerSym u8, alphaIdx u8, numPackets u32 ---
     char magic[4];
     uint32_t sampleRate, numPackets, seedidx;
-    uint8_t bitsPerSym, alphaIdx;
+    uint8_t bitsPerSym, alphaIdx, mulaw;
     fread(magic, 1, 4, in);
     fread(&sampleRate, sizeof(uint32_t), 1, in);
     fread(&bitsPerSym, 1, 1, in);
     fread(&alphaIdx, 1, 1, in);
+    fread(&mulaw, sizeof(uint8_t), 1, in);
     fread(&seedidx, sizeof(uint32_t), 1, in);
     fread(&numPackets, sizeof(uint32_t), 1, in);
 

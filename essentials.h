@@ -46,10 +46,18 @@ typedef struct WavHeader{
     // "data" Sub-chunk
     char data[4];    // "data"
     uint32_t subchunk2Size;    // Size of the raw audio data
+    
 } WavHeader;
 #pragma pack(pop)
 
 //how do we flash the data to each block
+
+typedef struct {
+    uint32_t bitbuf;
+    int      bitcount;   // 0..7 between calls — leftover sub-byte bits
+} BitPacker;
+
+
 
 #endif
 

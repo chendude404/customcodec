@@ -7,10 +7,10 @@ int main(int argc, char ** argv)
     //real time recording
     //step 1 input from .wav
 
-    //call of format ./our.exe our.wav alpha seed
+    //call of format ./our.exe our.wav alpha seed int (1 for mu law, 0 for not) out.glx
     if(argc != 5)
     {
-        printf("call of format ./our.exe our.wav alpha, seed, out.glx");
+        printf("call of format ./our.exe our.wav alpha, seed, mulaw, out.glx");
         return -1;
     }
 
@@ -47,7 +47,7 @@ int main(int argc, char ** argv)
     //can we assume 16 bit input 
     int numframes = header->subchunk2Size / header->blockAlign;
     printf("Audio Channels = %d\n", header->numChannels);
-    int framesperpacket = header->sampleRate / 100; //10ms oer packet
+      //10ms oer packet
     
     printf("sample bit depth = %d", header->bitsPerSample);
     printf("We have %d frames in this data", numframes);
@@ -61,8 +61,14 @@ int main(int argc, char ** argv)
     int16_t * databus = malloc(framesperpacket * sizeof(int16_t));
     int validframesread = framesperpacket;
     //10ms -> 480 or 441 frames per packet
-
-    FILE * outfp = fopen(argv[4], "wb");
+    //only take 480 (hardcode)
+    int mulaw = argv[4];
+    if(mulaw != 1 && mulaw != 0)
+    {
+        printf("Argv[4] must be Mu Law: 1 for Yes, 0 for No");
+    }
+    
+    FILE * outfp = fopen(argv[5], "wb");
     if(outfp == NULL)
     {
         printf("Could not write to output file, Error");
@@ -71,7 +77,7 @@ int main(int argc, char ** argv)
     printf("We are writing to output file %s", argv[4]);
 
 
-    writeglx(header, outfp, alphaval, numframes);
+    writeglx(header, outfp, alphaval, numframes, seedpointer, mulaw);
     
 
     if(header->numChannels == 1) //mono audio
@@ -81,7 +87,7 @@ int main(int argc, char ** argv)
             validframesread = fread(databus, sizeof(int16_t), framesperpacket, wavfp);
             //PROCESS PACKET HERE
             if(validframesread == framesperpacket)
-                resamplepackets(databus, outfp, framesperpacket, alphaval, seedpointer);
+                resamplepackets(databus, outfp, framesperpacket, alphaval, seedpointer, mulaw);
         }
     }
     else if(header->numChannels == 2) //stereo
@@ -98,7 +104,7 @@ int main(int argc, char ** argv)
             }
             //PROCESS PACKET HERE
             if(validframesread == 2*framesperpacket)
-                resamplepackets(databus, outfp, framesperpacket, alphaval, seedpointer);
+                resamplepackets(databus, outfp, framesperpacket, alphaval, seedpointer, mulaw);
             else
                 validframesread = counter; // leftover frames, in mono-frame units, for the guard
         }
@@ -174,7 +180,7 @@ WavHeader * readfile(FILE * fp)
     return header;
 }
 
-void writeglx(WavHeader * header, FILE * fp, int alpha, int numframes)
+void writeglxheader(WavHeader * header, FILE * fp, int alpha, int numframes, uint32_t * seedpointer, int mulaw)
 {
     //FORMAT OF .GLX HEADER 
         /*
@@ -183,6 +189,8 @@ void writeglx(WavHeader * header, FILE * fp, int alpha, int numframes)
         uint32_t sampleRate; // output rate (16000)
         uint8_t  bitsPerSym; // 3
         uint8_t  alphaIdx;   // the alpha index used
+        uint8_t mulaw        // 1 or 0
+        uint32_t seedpointer //our seedvalue
         uint32_t numPackets; // total number of packets
         } GlxHeader;
         */
@@ -194,6 +202,8 @@ void writeglx(WavHeader * header, FILE * fp, int alpha, int numframes)
     uint8_t bitdepthandalpha[] = {3, scaledalpha};
     fwrite(&sampleRate, sizeof(uint32_t), 1, fp);
     fwrite(&bitdepthandalpha, sizeof(uint8_t), 2, fp);
+    fwrite(&mulaw, sizeof(uint8_t), 1, fp);
+    fwrite(seedpointer, sizeof(uint32_t), 1, fp);
     uint32_t numpackets = numframes / (header->sampleRate / 100);
     fwrite(&numpackets, sizeof(uint32_t), 1, fp);
 

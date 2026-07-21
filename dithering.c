@@ -86,9 +86,6 @@ Taps from: https://docs.amd.com/v/u/en-US/xapp052
 
 //GEMINI's QUANTIZER FOR THE ENTIRE SAMPLE
 
-//WE PROBABLY NEED TO FIX THE DITHER AMPLITUDE 
-FIX_ME_IMPLEMENT_THIS(); 
-
 void dither_quantize_fast(int16_t * restrict samples, size_t num_samples, int target_bits, uint32_t alpha_q16, uint32_t * restrict seed_ptr, int mulaw) 
 {
     int shift_bits = 16 - target_bits;
@@ -116,15 +113,7 @@ void dither_quantize_fast(int16_t * restrict samples, size_t num_samples, int ta
         // Because 'samples' is marked restrict, the compiler can use SIMD here
         for (size_t j = 0; j < current_block; j++) {
             //
-            int dithered = samples[i + j];
-            if(mulaw)
-            {
-                dithered = dither_buffer[j] + lineartomulaw(samples[i + j]);
-            }
-            else //directly quantized
-            {
-                dithered = (int32_t)samples[i + j] + dither_buffer[j];
-            }
+            int dithered = samples[i + j] + dither_buffer[j];
             
             // Branchless clamping (compiles to fast CMOV/CSEL instructions)
             dithered = dithered > 32767 ? 32767 : dithered;

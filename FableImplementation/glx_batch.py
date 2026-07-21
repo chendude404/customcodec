@@ -2,8 +2,8 @@
 """
 glx_batch.py — Python harness for the .glx codec (FableImplementation/our.exe).
 
-The C encoder (`our.exe our.wav alpha seed bitdepth dither out.glx`) accepts ONLY
-48 kHz / 16-bit PCM WAV (mono or stereo). This wrapper uses ffprobe/ffmpeg to
+The C encoder (`our.exe our.wav alpha seed bitdepth dither out.glx huff mulaw`)
+accepts ONLY 48 kHz / 16-bit PCM WAV (mono or stereo). This wrapper uses ffprobe/ffmpeg to
 condition an arbitrary pile of .wav files to meet that contract, then runs each
 through the encoder:
 
@@ -28,6 +28,8 @@ Options:
     --seed N           LFSR dither seed, must be nonzero    (default: 12345)
     --bits {1,2,3}     quantizer bits per sample            (default: 3)
     --dither {1,2}     1 = masked RPDF, 2 = spiked          (default: 1)
+    --huff {0,1}       1 = Huffman-code deltas, 0 = raw     (default: 1)
+    --mulaw {0,1}      1 = mu-law companding, 0 = linear    (default: 0)
     --exe PATH         path to encoder (default: our.exe next to this script)
     --ffmpeg PATH      ffmpeg binary                        (default: ffmpeg)
     --ffprobe PATH     ffprobe binary                       (default: ffprobe)
@@ -132,10 +134,11 @@ def process_one(src, args, tmpdir):
             f"{in_rate or '?'}Hz {in_ch or '?'}ch "
             f"-> 48000/16 {out_ch or '?'}ch")
 
-    # encode: our.exe wav alpha seed bitdepth dither out.glx
+    # encode: our.exe wav alpha seed bitdepth dither out.glx huff mulaw
     out_glx = os.path.join(args.outdir, base + ".glx")
     cmd = [args.exe, wav48, str(args.alpha), str(args.seed),
-           str(args.bits), str(args.dither), out_glx]
+           str(args.bits), str(args.dither), out_glx,
+           str(args.huff), str(args.mulaw)]
     enc = subprocess.run(cmd, capture_output=True, text=True)
 
     if not args.keep_wav:
@@ -196,9 +199,13 @@ def main(argv=None):
     ap.add_argument("--alpha", type=int, default=6, help="dither index 1..11")
     ap.add_argument("--seed", type=int, default=12345, help="dither seed (nonzero)")
     ap.add_argument("--bits", type=int, choices=(1, 2, 3), default=3,
-                    help="quantizer bits per sample (mu-law is always on)")
+                    help="quantizer bits per sample")
     ap.add_argument("--dither", type=int, choices=(1, 2), default=1,
                     help="dither PDF: 1 = masked RPDF, 2 = spiked")
+    ap.add_argument("--huff", type=int, choices=(0, 1), default=1,
+                    help="1 = Huffman-code deltas (target bitrate), 0 = raw fixed-width")
+    ap.add_argument("--mulaw", type=int, choices=(0, 1), default=0,
+                    help="1 = mu-law companding, 0 = linear")
     ap.add_argument("--exe", default=None,
                     help="path to encoder (default: our.exe next to this script)")
     ap.add_argument("--ffmpeg", default=None)
